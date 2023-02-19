@@ -52,7 +52,6 @@ CONTAINER_LABEL_COMPARESTR = 'asg3tester.comparestr'
 
 
 config_var: ContextVar[Config] = ContextVar('config')
-whichloop_var: ContextVar[int] = ContextVar('whichloop')
 docker_client_var: ContextVar[aiodocker.Docker] = ContextVar('docker_client')
 kvs_image_var: ContextVar[Mapping[str, Any]] = ContextVar('kvs_image')
 kvs_network_var: ContextVar['DockerNetwork'] = ContextVar('kvs_network')
@@ -64,7 +63,6 @@ async def setup(config: Config | None = None) -> None:
         config = Config()
 
     config_var.set(config)
-    whichloop_var.set(id(asyncio.get_event_loop()))
     http_session_var.set(aiohttp.ClientSession())
     docker_client_var.set(docker_client := aiodocker.Docker())
     kvs_image_var.set(kvs_image := await docker_client.images.inspect(config.image_name))

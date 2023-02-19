@@ -1,10 +1,11 @@
 import asyncio
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
 import itertools
 import logging
-from typing import TYPE_CHECKING, Any, Mapping, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Mapping
 from collections.abc import AsyncIterator
 import aiodocker
 import aiohttp
@@ -14,40 +15,44 @@ if TYPE_CHECKING:
     from aiodocker.containers import DockerContainer
     from aiodocker.networks import DockerNetwork
 
-# ==== type stuff ====
-T_covar = TypeVar('T_covar', covariant=True)
-class AsyncContextManager(Protocol[T_covar]):
-    async def __aenter__(self) -> T_covar: ...
-    async def __aexit__(self, exc_type, exc_value, traceback) -> bool | None: ...
-
 # ==== ====
 logger = logging.getLogger(__name__)
-# logging.basicConfig(level=logging.DEBUG)  # FIXME should probably move this to the test main file
 logger.setLevel(logging.DEBUG)
 
 # ==== config ====
 
-KVS_IMAGE_NAME = 'kvs:2.0'
-KVS_NETWORK_NAME = 'kv_subnet'
-KVS_NETWORK_SUBNET = IPv4Network('10.10.0.0/16')
-KVS_HOST_BASE_PORT = 13800
-KVS_HOST_HOST = 'localhost'
-# True = stop containers with stop, False = stop containers with kill
-KVS_GRACEFUL_STOP = False
+@dataclass(frozen=True, kw_only=True, match_args=False)
+class Config:
+    image_name: str = 'kvs:2.0'
+    """name of the docker image to use"""
+    network_name: str = 'kv_subnet'
+    """name of the docker network to use"""
+    network_subnet: IPv4Network = IPv4Network('10.10.0.0/16')
+    """subnet of the docker network"""
+    base_host_port: int = 13800
+    """
+    created containers' mapped ports will be assigned starting from this number and counting up
+    (e.g. for a value of 123, the first container created will map to 123, the second to 124, etc.)
+    """
+    localhost: str = 'localhost'
+    graceful_stop_containers: bool = False
+    """True = stop containers with stop, False = stop containers with kill"""
+    alivetest_retry_delay: float = 0.1
+    """how many seconds to wait between pings while waiting for a container to start"""
 
-ALIVETEST_RETRY_DELAY = 0.1
+    # TODO: give this a better name
+    def str_for_container_compare(self) -> str:
+        return f'image:{self.network_name!r} network:{self.network_name!r} subnet:{self.network_subnet} base port:{self.base_host_port} localhost:{self.localhost}'
 
 # ==== constants ====
 
 KVS_NETWORK_PORT = 8080
+CONTAINER_LABEL_CLIENTNUM = 'asg3tester.clientnum'
+CONTAINER_LABEL_COMPARESTR = 'asg3tester.comparestr'
 
 
-# ==== internal constants ====
-
-_ASG3TESTER_CONTAINER_NUM_LABEL = 'asg3tester.clientnum'
-
-# ==== asnyc global setup/cleanup ====
-
+# ==== setup/cleanup ====
+config_var: ContextVar[Config] = ContextVar('config')
 whichloop_var: ContextVar[int] = ContextVar('whichloop')
 docker_client_var: ContextVar[aiodocker.Docker] = ContextVar('docker_client')
 kvs_image_var: ContextVar[Mapping[str, Any]] = ContextVar('kvs_image')
@@ -55,25 +60,33 @@ kvs_network_var: ContextVar['DockerNetwork'] = ContextVar('kvs_network')
 http_session_var: ContextVar[aiohttp.ClientSession] = ContextVar('http_session')
 nodecontainer_cache_var: ContextVar[dict[int, 'NodeContainer']] = ContextVar('nodecontainer_cache')
 
-async def setup():
+async def setup(config: Config | None = None):
+    if config is None:
+        config = Config()
+    config_var.set(config)
     whichloop_var.set(id(asyncio.get_event_loop()))
-    http_session_var.set(http_session := aiohttp.ClientSession())
+    http_session_var.set(aiohttp.ClientSession())
     docker_client_var.set(docker_client := aiodocker.Docker())
-    kvs_image_var.set(kvs_image := await docker_client.images.inspect(KVS_IMAGE_NAME))
-    kvs_network_var.set(kvs_network := await docker_client.networks.get(KVS_NETWORK_NAME))
+    kvs_image_var.set(kvs_image := await docker_client.images.inspect(config.image_name))
+    kvs_network_var.set(kvs_network := await docker_client.networks.get(config.network_name))
     nodecontainer_cache_var.set(dict())
 
     for container in await docker_client.containers.list(all=True, filters={'network': [kvs_network.id]}):
         container_info = await container.show()
-        clientnum = container_info['Config']['Labels'].get(_ASG3TESTER_CONTAINER_NUM_LABEL, None)
+        clientnum = container_info['Config']['Labels'].get(CONTAINER_LABEL_CLIENTNUM, None)
+        comparestr = container_info['Config']['Labels'].get(CONTAINER_LABEL_COMPARESTR, None)
         if clientnum is None:
             if container_info['State']['Status']['Running']:
                 logger.error(f'''a container that isn't managed by asg3tester is running on the network, will likely cause issues (has id: {container_info['Id']})''')
         else:
-            # if the image has been rebuilt since that container was made then we can't reuse it
-            if container_info['Image'] != kvs_image['Id']:
-                await container.kill()
-                await container.delete()
+            if (
+                # if the image has been rebuilt since that container was made then we can't reuse it
+                (container_info['Image'] != kvs_image['Id'])
+                # if the config has changed since the container was made then we can't reuse it
+                or (comparestr != config.str_for_container_compare())
+            ):
+                # await container.kill()
+                await container.delete(force=True)
             else:
                 await NodeContainer._register_container(num=int(clientnum), container=container)
 
@@ -100,17 +113,15 @@ class NodeContainer:
     def address(self) -> str:
         return f'{self.subnet_ip}:{self.subnet_port}'
 
-    def __init__(self) -> None:
-        pass
-
     @classmethod
     async def _create(cls, num: int, container: 'DockerContainer | None' = None) -> 'NodeContainer':
+        config = config_var.get()
         node = NodeContainer()
         node._num = num
-        node.host_port = KVS_HOST_BASE_PORT + num
-        node.subnet_ip = KVS_NETWORK_SUBNET[num]
+        node.host_port = config.base_host_port + num
+        node.subnet_ip = config.network_subnet[num]
         node.subnet_port = KVS_NETWORK_PORT
-        node.base_url = URL.build(scheme='http', host=KVS_HOST_HOST, port=node.host_port)
+        node.base_url = URL.build(scheme='http', host=config.localhost, port=node.host_port)
         node._started = False
         if container is not None:
             node.container = container
@@ -122,18 +133,21 @@ class NodeContainer:
         docker_client = docker_client_var.get()
         kvs_image = kvs_image_var.get()
         kvs_network = kvs_network_var.get()
+        config = config_var.get()
         container: 'DockerContainer' = await docker_client.containers.create(
+            # name=f'asg3tester-{self._num}',
             config={
                 'Env': [f'ADDRESS={self.subnet_ip}:{self.subnet_port}'],
                 'Image': kvs_image['Id'],
                 'ExposedPorts': { f'{self.subnet_port}/tcp': {} },
                 'AttachStdout': False, 'AttachStderr': False,
                 'HostConfig': {
-                    'NetworkMode': KVS_NETWORK_NAME,
+                    'NetworkMode': config.network_name,
                     'PortBindings': { f'{self.subnet_port}/tcp': [ { 'HostPort': f'{self.host_port}' } ] },
                 },
                 'Labels': {
-                    _ASG3TESTER_CONTAINER_NUM_LABEL: f'{self._num}',
+                    CONTAINER_LABEL_CLIENTNUM: f'{self._num}',
+                    CONTAINER_LABEL_COMPARESTR: config.str_for_container_compare(),
                 },
             }
         )
@@ -168,6 +182,7 @@ class NodeContainer:
         return self.__wait_for_start()
 
     async def __wait_for_start(self):
+        retry_delay = config_var.get().alivetest_retry_delay
         await self.container.start()
         num_tries = 0
         async with aiohttp.ClientSession() as session:
@@ -185,6 +200,7 @@ class NodeContainer:
                                     return
                 except (aiohttp.ClientConnectionError):
                     pass
+                await asyncio.sleep(retry_delay)
                 num_tries += 1
 
     def _stop(self):
@@ -194,7 +210,8 @@ class NodeContainer:
         return self.__stop()
 
     async def __stop(self):
-        if KVS_GRACEFUL_STOP:
+        config = config_var.get()
+        if config.graceful_stop_containers:
             await self.container.stop()
         else:
             await self.container.kill()

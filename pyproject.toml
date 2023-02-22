@@ -1,0 +1,31 @@
+[build-system]
+requires = [ "setuptools>=64.0.0" ]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asg3tester"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp~=3.8.4",
+    "yarl~=1.8.2",
+    "aiodocker~=0.21.0",
+]
+
+[tool.setuptools]
+packages = ["asg3tester"]
+
+[tool.setuptools.package-data]
+asg3tester = [
+    "py.typed",
+    "**/*.pyi",
+]
+
+[tool.mypy]
+disallow_untyped_defs = true
+disallow_any_unimported = true
+no_implicit_optional = true
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+show_error_codes = true

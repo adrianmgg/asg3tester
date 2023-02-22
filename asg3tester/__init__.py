@@ -42,7 +42,7 @@ class Config:
     """how many seconds to wait between pings while waiting for a container to start"""
 
     # TODO: give this a better name
-    def str_for_container_compare(self) -> str:
+    def _str_for_container_compare(self) -> str:
         return f'image:{self.network_name!r} network:{self.network_name!r} subnet:{self.network_subnet} base port:{self.base_host_port} localhost:{self.localhost}'
 
 
@@ -81,7 +81,7 @@ async def setup(config: Config | None = None) -> None:
                 # if the image has been rebuilt since that container was made then we can't reuse it
                 (container_info['Image'] != kvs_image['Id'])
                 # if the config has changed since the container was made then we can't reuse it
-                or (comparestr != config.str_for_container_compare())
+                or (comparestr != config._str_for_container_compare())
             ):
                 # await container.kill()
                 await container.delete(force=True)
@@ -144,7 +144,7 @@ class NodeContainer:
                 },
                 'Labels': {
                     CONTAINER_LABEL_CLIENTNUM: f'{self._num}',
-                    CONTAINER_LABEL_COMPARESTR: config.str_for_container_compare(),
+                    CONTAINER_LABEL_COMPARESTR: config._str_for_container_compare(),
                 },
             }
         )
@@ -180,25 +180,26 @@ class NodeContainer:
 
     async def __wait_for_start(self) -> None:
         retry_delay = config_var.get().alivetest_retry_delay
+        http_session = http_session_var.get()
         await self.container.start()
         num_tries = 0
-        async with aiohttp.ClientSession() as session:
-            while True:
-                try:
-                    async with session.get(self.base_url / 'alivetest') as resp:
-                        try:
-                            body = await resp.json()
-                        except ValueError:
-                            pass
-                        else:
-                            match body:
-                                case {'alive': True}:
+        while True:
+            try:
+                async with http_session.get(self.base_url / 'alivetest') as resp:
+                    try:
+                        body = await resp.json()
+                    except ValueError:
+                        pass
+                    else:
+                        match body:
+                            case {'alive': True}:
+                                if num_tries > 0:
                                     logger.debug(f'container started after {num_tries} failed checks')
-                                    return
-                except (aiohttp.ClientConnectionError):
-                    pass
-                await asyncio.sleep(retry_delay)
-                num_tries += 1
+                                return
+            except (aiohttp.ClientConnectionError):
+                pass
+            await asyncio.sleep(retry_delay)
+            num_tries += 1
 
     def _stop(self) -> Coroutine[Any, Any, None]:
         if not self._started:
@@ -259,6 +260,9 @@ class NodeApi:
         return await self._request('DELETE', self.endpoint_data_single(key), json={'causal-metadata': causal_metadata})
     async def data_all_get(self, causal_metadata: Any = {}) -> aiohttp.ClientResponse:
         return await self._request('GET', self.endpoint_data_all, json={'causal-metadata': causal_metadata})
+
+    async def kill(self) -> None:
+        await self.container._stop()
 
 
 class _ClientApiResponseContextManager:

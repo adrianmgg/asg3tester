@@ -34,6 +34,8 @@ class Config:
     """name of the docker network to use"""
     network_subnet: IPv4Network = IPv4Network('10.10.0.0/16')
     """subnet of the docker network"""
+    network_subnet_skipfirst: int = 2
+    """don't use the first n ips of the subnet"""
     base_host_port: int = 13800
     """
     created containers' mapped ports will be assigned starting from this number and counting up
@@ -46,7 +48,7 @@ class Config:
     """how many seconds to wait between pings while waiting for a container to start"""
 
     def _str_for_container_compare(self) -> str:
-        return f'image:{self.network_name!r} network:{self.network_name!r} subnet:{self.network_subnet} base port:{self.base_host_port} localhost:{self.localhost}'
+        return f'image:{self.network_name!r} network:{self.network_name!r} subnet:{self.network_subnet} skip {self.network_subnet_skipfirst} base port:{self.base_host_port} localhost:{self.localhost}'
 
 
 KVS_NETWORK_PORT = 8080
@@ -86,9 +88,11 @@ async def setup(config: Config | None = None) -> None:
                 # if the config has changed since the container was made then we can't reuse it
                 or (comparestr != config._str_for_container_compare())
             ):
+                logger.info(f'deleting outdated asg3tester managed container {container.id!r}')
                 # await container.kill()
                 await container.delete(force=True)
             else:
+                logger.debug(f'reusing container #{clientnum} ({container.id!r})')
                 await NodeContainer._register_container(num=int(clientnum), container=container)
 
 async def cleanup() -> None:
@@ -119,7 +123,7 @@ class NodeContainer:
         node = NodeContainer()
         node._num = num
         node.host_port = config.base_host_port + num
-        node.subnet_ip = config.network_subnet[num]
+        node.subnet_ip = config.network_subnet[num + config.network_subnet_skipfirst]
         node.subnet_port = KVS_NETWORK_PORT
         node.base_url = URL.build(scheme='http', host=config.localhost, port=node.host_port)
         node._started = False
@@ -188,7 +192,7 @@ class NodeContainer:
         num_tries = 0
         while True:
             try:
-                async with http_session.get(self.base_url / 'alivetest') as resp:
+                async with http_session.get(self.base_url/'asg3tester'/'alivetest') as resp:
                     try:
                         body = await resp.json()
                     except ValueError:
@@ -242,28 +246,32 @@ class NodeApi:
     def _endpoint_data_single(self, key: str) -> URL:
         return self.container.base_url/'kvs'/'data'/key
 
+    @property
+    def address(self) -> str:
+        return self.container.address
+
     def __init__(self, container: NodeContainer) -> None:
         self.container = container
         self._endpoint_view = self.container.base_url/'kvs'/'admin'/'view'
         self._endpoint_data_all = self.container.base_url/'kvs'/'data'
 
-    async def _request(self, method: str, url: URL, *, json: Any | None = None) -> aiohttp.ClientResponse:
-        return await http_session_var.get().request(url=url, method=method, json=json)
+    def _request(self, method: str, url: URL, *, json: Any | None = None) -> 'aiohttp.client._RequestContextManager':
+        return http_session_var.get().request(url=url, method=method, json=json)
 
-    async def view_put(self, view: list[str]) -> aiohttp.ClientResponse:
-        return await self._request('PUT', self._endpoint_view, json={'view': view})
-    async def view_get(self) -> aiohttp.ClientResponse:
-        return await self._request('GET', self._endpoint_view)
-    async def view_delete(self) -> aiohttp.ClientResponse:
-        return await self._request('DELETE', self._endpoint_view)
-    async def data_single_put(self, key: str, val: str, causal_metadata: Any = {}) -> aiohttp.ClientResponse:
-        return await self._request('PUT', self._endpoint_data_single(key), json={'val': val, 'causal-metadata': causal_metadata})
-    async def data_single_get(self, key: str, causal_metadata: Any = {}) -> aiohttp.ClientResponse:
-        return await self._request('GET', self._endpoint_data_single(key), json={'causal-metadata': causal_metadata})
-    async def data_single_delete(self, key: str, causal_metadata: Any = {}) -> aiohttp.ClientResponse:
-        return await self._request('DELETE', self._endpoint_data_single(key), json={'causal-metadata': causal_metadata})
-    async def data_all_get(self, causal_metadata: Any = {}) -> aiohttp.ClientResponse:
-        return await self._request('GET', self._endpoint_data_all, json={'causal-metadata': causal_metadata})
+    def view_put(self, view: list[str]) -> 'aiohttp.client._RequestContextManager':
+        return self._request('PUT', self._endpoint_view, json={'view': view})
+    def view_get(self) -> 'aiohttp.client._RequestContextManager':
+        return self._request('GET', self._endpoint_view)
+    def view_delete(self) -> 'aiohttp.client._RequestContextManager':
+        return self._request('DELETE', self._endpoint_view)
+    def data_single_put(self, key: str, val: str, causal_metadata: Any) -> 'aiohttp.client._RequestContextManager':
+        return self._request('PUT', self._endpoint_data_single(key), json={'val': val, 'causal-metadata': causal_metadata})
+    def data_single_get(self, key: str, causal_metadata: Any) -> 'aiohttp.client._RequestContextManager':
+        return self._request('GET', self._endpoint_data_single(key), json={'causal-metadata': causal_metadata})
+    def data_single_delete(self, key: str, causal_metadata: Any) -> 'aiohttp.client._RequestContextManager':
+        return self._request('DELETE', self._endpoint_data_single(key), json={'causal-metadata': causal_metadata})
+    def data_all_get(self, causal_metadata: Any) -> 'aiohttp.client._RequestContextManager':
+        return self._request('GET', self._endpoint_data_all, json={'causal-metadata': causal_metadata})
 
     async def kill(self) -> None:
         await self.container._stop()
@@ -271,22 +279,22 @@ class NodeApi:
 
 class _ClientApiResponseContextManager:
     __client: 'ClientApi'
-    __foo: 'aiohttp.client._RequestContextManager'
+    __request_ctx: 'aiohttp.client._RequestContextManager'
 
-    def __init__(self, client: 'ClientApi', foo: 'aiohttp.client._RequestContextManager') -> None:
+    def __init__(self, client: 'ClientApi', request_ctx: 'aiohttp.client._RequestContextManager') -> None:
         self.__client = client
-        self.__foo = foo
+        self.__request_ctx = request_ctx
 
     async def __aenter__(self) -> aiohttp.ClientResponse:
-        response = await self.__foo.__aenter__()
+        response = await self.__request_ctx.__aenter__()
         await self.__client._update_causal_metadata_from(response)
         return response
 
     async def __aexit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None) -> None:
-        await self.__foo.__aexit__(exc_type, exc, tb)
+        await self.__request_ctx.__aexit__(exc_type, exc, tb)
 
     async def __await_impl(self) -> aiohttp.ClientResponse:
-        response = await self.__foo
+        response = await self.__request_ctx
         await self.__client._update_causal_metadata_from(response)
         return response
 
@@ -308,30 +316,20 @@ class ClientApi:
             if isinstance(body, dict) and ('causal-metadata' in body):
                 self.__last_seen_causal_metadata = body['causal-metadata']
 
-    def _request(self, method: str, url: URL, *, json: Any | None = None) -> _ClientApiResponseContextManager:
-        return _ClientApiResponseContextManager(self, http_session_var.get().request(url=url, method=method, json=json))
-
-    def view_put(self, node: NodeApi, view: list[str]) -> _ClientApiResponseContextManager:
-       return self._request('PUT', node._endpoint_view, json={'view': view})
-    def view_get(self, node: NodeApi) -> _ClientApiResponseContextManager:
-       return self._request('GET', node._endpoint_view)
-    def view_delete(self, node: NodeApi) -> _ClientApiResponseContextManager:
-       return self._request('DELETE', node._endpoint_view)
+    # def view_put(self, node: NodeApi, view: list[str]) -> 'aiohttp.client._RequestContextManager':
+    #     return node.view_put(view=view)
+    # def view_get(self, node: NodeApi) -> 'aiohttp.client._RequestContextManager':
+    #    return node.view_get()
+    # def view_delete(self, node: NodeApi) -> 'aiohttp.client._RequestContextManager':
+    #    return node.view_delete()
     def data_single_put(self, node: NodeApi, key: str, val: str) -> _ClientApiResponseContextManager:
-       return self._request('PUT', node._endpoint_data_single(key), json={'val': val, 'causal-metadata': self.__last_seen_causal_metadata})
+       return _ClientApiResponseContextManager(self, node.data_single_put(key=key, val=val, causal_metadata=self.__last_seen_causal_metadata))
     def data_single_get(self, node: NodeApi, key: str) -> _ClientApiResponseContextManager:
-       return self._request('GET', node._endpoint_data_single(key), json={'causal-metadata': self.__last_seen_causal_metadata})
+       return _ClientApiResponseContextManager(self, node.data_single_get(key=key, causal_metadata=self.__last_seen_causal_metadata))
     def data_single_delete(self, node: NodeApi, key: str) -> _ClientApiResponseContextManager:
-       return self._request('DELETE', node._endpoint_data_single(key), json={'causal-metadata': self.__last_seen_causal_metadata})
+       return _ClientApiResponseContextManager(self, node.data_single_delete(key=key, causal_metadata=self.__last_seen_causal_metadata))
     def data_all_get(self, node: NodeApi) -> _ClientApiResponseContextManager:
-       return self._request('GET', node._endpoint_data_all, json={'causal-metadata': self.__last_seen_causal_metadata})
-
-async def setup_view(*nodes: NodeApi) -> None:
-    """ make a view containing the provided nodes (in the provided order), and send that view to all of those nodes """
-    view = [node.container.address for node in nodes]
-    # TODO can (should?) probably do this parallel
-    for node in nodes:
-        await node.view_put(view=view)
+       return _ClientApiResponseContextManager(self, node.data_all_get(causal_metadata=self.__last_seen_causal_metadata))
 
 def start_node() -> AbstractAsyncContextManager[NodeApi]:
     return NodeContainer.start_one()

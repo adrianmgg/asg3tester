@@ -93,6 +93,8 @@ async def setup(config: Config | None = None) -> None:
                 await container.delete(force=True)
             else:
                 logger.debug(f'reusing container #{clientnum} ({container.id!r})')
+                if container_info['State']['Status'] in {'running'}:
+                    await container.kill()
                 await NodeContainer._register_container(num=int(clientnum), container=container)
 
 async def cleanup() -> None:
@@ -279,20 +281,20 @@ class NodeApi:
     async def create_partition(self, other: 'NodeApi', *, both_ways: bool = True) -> None:
         if both_ways:
             await other.create_partition(self, both_ways=False)
-        # TODO check exec response to make sure commands actually ran
-        await asyncio.gather(
-            self.container.container.exec(cmd=['iptables', '--append', 'INPUT',  '--source', str(other.container.subnet_ip), '--jump', 'DROP']),
-            self.container.container.exec(cmd=['iptables', '--append', 'OUTPUT', '--source', str(other.container.subnet_ip), '--jump', 'DROP']),
-        )
+        # TODO check to make sure commands actually ran successfully
+        for foo in 'INPUT', 'OUTPUT':
+            execute = await self.container.container.exec(cmd=['iptables', '--append', foo, '--source', str(other.container.subnet_ip), '--jump', 'DROP'], privileged=True)
+            async with execute.start(detach=False) as stream:
+                await stream.read_out()
 
     async def heal_partition(self, other: 'NodeApi', *, both_ways: bool = True) -> None:
         if both_ways:
             await other.heal_partition(self, both_ways=False)
-        # TODO check exec response to make sure commands actually ran
-        await asyncio.gather(
-            self.container.container.exec(cmd=['iptables', '--delete', 'INPUT',  '--source', str(other.container.subnet_ip), '--jump', 'DROP']),
-            self.container.container.exec(cmd=['iptables', '--delete', 'OUTPUT', '--source', str(other.container.subnet_ip), '--jump', 'DROP']),
-        )
+        # TODO check to make sure commands actually ran successfully
+        for foo in 'INPUT', 'OUTPUT':
+            execute = await self.container.container.exec(cmd=['iptables', '--delete', foo, '--source', str(other.container.subnet_ip), '--jump', 'DROP'], privileged=True)
+            async with execute.start(detach=False) as stream:
+                await stream.read_out()
 
 class _ClientApiResponseContextManager:
     __client: 'ClientApi'

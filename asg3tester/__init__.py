@@ -276,6 +276,23 @@ class NodeApi:
     async def kill(self) -> None:
         await self.container._stop()
 
+    async def create_partition(self, other: 'NodeApi', *, both_ways: bool = True) -> None:
+        if both_ways:
+            await other.create_partition(self, both_ways=False)
+        # TODO check exec response to make sure commands actually ran
+        await asyncio.gather(
+            self.container.container.exec(cmd=['iptables', '--append', 'INPUT',  '--source', str(other.container.subnet_ip), '--jump', 'DROP']),
+            self.container.container.exec(cmd=['iptables', '--append', 'OUTPUT', '--source', str(other.container.subnet_ip), '--jump', 'DROP']),
+        )
+
+    async def heal_partition(self, other: 'NodeApi', *, both_ways: bool = True) -> None:
+        if both_ways:
+            await other.heal_partition(self, both_ways=False)
+        # TODO check exec response to make sure commands actually ran
+        await asyncio.gather(
+            self.container.container.exec(cmd=['iptables', '--delete', 'INPUT',  '--source', str(other.container.subnet_ip), '--jump', 'DROP']),
+            self.container.container.exec(cmd=['iptables', '--delete', 'OUTPUT', '--source', str(other.container.subnet_ip), '--jump', 'DROP']),
+        )
 
 class _ClientApiResponseContextManager:
     __client: 'ClientApi'

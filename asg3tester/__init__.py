@@ -8,9 +8,10 @@ from ipaddress import IPv4Address, IPv4Network
 import itertools
 import logging
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Coroutine, Generator, Mapping
+from typing import TYPE_CHECKING, Any, Awaitable, Coroutine, Generator, Mapping
 from collections.abc import AsyncIterator
 import aiodocker
+from aiodocker.execs import Exec
 import aiohttp
 from yarl import URL
 
@@ -239,6 +240,13 @@ class NodeContainer:
             if node is not None:
                 await node._stop()
 
+    async def _exec(self, *cmd: str, privileged: bool = False) -> Exec:
+        execute: Exec = await self.container.exec(cmd=cmd, privileged=privileged)
+        async with execute.start(detach=False) as stream:
+            out = await stream.read_out()
+        return execute
+
+
 
 class NodeApi:
     container: NodeContainer
@@ -278,23 +286,23 @@ class NodeApi:
     async def kill(self) -> None:
         await self.container._stop()
 
-    async def create_partition(self, other: 'NodeApi', *, both_ways: bool = True) -> None:
-        if both_ways:
-            await other.create_partition(self, both_ways=False)
-        # TODO check to make sure commands actually ran successfully
-        for foo in 'INPUT', 'OUTPUT':
-            execute = await self.container.container.exec(cmd=['iptables', '--append', foo, '--source', str(other.container.subnet_ip), '--jump', 'DROP'], privileged=True)
-            async with execute.start(detach=False) as stream:
-                await stream.read_out()
+    # TODO give those params actual names
+    def _iptables_exec(self, other: 'NodeApi', foo: str, bar: str) -> Awaitable[Exec]:
+        return self.container._exec('iptables', foo, bar, '--source', str(other.container.subnet_ip), '--jump', 'DROP', privileged=True)
 
-    async def heal_partition(self, other: 'NodeApi', *, both_ways: bool = True) -> None:
-        if both_ways:
-            await other.heal_partition(self, both_ways=False)
+    async def create_partition(self, other: 'NodeApi') -> None:
         # TODO check to make sure commands actually ran successfully
-        for foo in 'INPUT', 'OUTPUT':
-            execute = await self.container.container.exec(cmd=['iptables', '--delete', foo, '--source', str(other.container.subnet_ip), '--jump', 'DROP'], privileged=True)
-            async with execute.start(detach=False) as stream:
-                await stream.read_out()
+        await self._iptables_exec(other, '--append', 'INPUT')
+        await self._iptables_exec(other, '--append', 'OUTPUT')
+        await other._iptables_exec(self, '--append', 'INPUT')
+        await other._iptables_exec(self, '--append', 'OUTPUT')
+
+    async def heal_partition(self, other: 'NodeApi') -> None:
+        # TODO check to make sure commands actually ran successfully
+        await self._iptables_exec(other, '--delete', 'INPUT')
+        await self._iptables_exec(other, '--delete', 'OUTPUT')
+        await other._iptables_exec(self, '--delete', 'INPUT')
+        await other._iptables_exec(self, '--delete', 'OUTPUT')
 
 class _ClientApiResponseContextManager:
     __client: 'ClientApi'

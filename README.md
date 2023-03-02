@@ -46,6 +46,15 @@ class TestAssignment3(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 200)
             self.assertListEqual((await response.json())['view'], view)
 
+    async def test_partition(self):
+        async with start_node() as a, start_node() as b, start_client() as client:
+            await a.view_put(view=[a.address, b.address])
+            # (requires iptables to be installed in container, currently just fails silently if it isn't)
+            await a.create_partition(b)
+            ...  # do some stuff
+            await a.heal_partition(b)
+            ...  # do some more stuff
+
 if __name__ == '__main__':
     unittest.main()
 ```

@@ -80,7 +80,7 @@ async def setup(config: Config | None = None) -> None:
         clientnum = container_info['Config']['Labels'].get(CONTAINER_LABEL_CLIENTNUM, None)
         comparestr = container_info['Config']['Labels'].get(CONTAINER_LABEL_COMPARESTR, None)
         if clientnum is None:
-            if container_info['State']['Status']['Running']:
+            if container_info['State']['Status'] == 'running':
                 logger.error(f'''a container that isn't managed by asg3tester is running on the network, will likely cause issues (has id: {container_info['Id']})''')
         else:
             if (

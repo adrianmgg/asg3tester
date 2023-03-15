@@ -270,6 +270,8 @@ class NodeApi:
 
     def view_put(self, view: list[str]) -> 'aiohttp.client._RequestContextManager':
         return self._request('PUT', self._endpoint_view, json={'view': view})
+    def view_put_asg4(self, num_shards: int, nodes: list[str]) -> 'aiohttp.client._RequestContextManager':
+        return self._request('PUT', self._endpoint_view, json={'num_shards': num_shards, 'nodes': nodes})
     def view_get(self) -> 'aiohttp.client._RequestContextManager':
         return self._request('GET', self._endpoint_view)
     def view_delete(self) -> 'aiohttp.client._RequestContextManager':

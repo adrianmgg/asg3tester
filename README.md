@@ -18,6 +18,8 @@ defaults should work fine.
 i'll probably write out docs for the rest it eventually but for now you can just look at `NodeApi`
 and `ClientApi` in [`asg3tester/__init__.pyi`](asg3tester/__init__.pyi) for a list of the functions
 
+NOTE: for assignment 4, use `node.view_put_asg4` instead of `node.view_put`
+
 ```python
 import unittest
 import asg3tester
@@ -32,13 +34,14 @@ class TestAssignment3(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_2nodes(self):
         async with start_node() as a, start_node() as b, start_client() as client:
-            await a.view_put(view=[a.address, b.address])
+            await a.view_put(view=[a.address, b.address])  # for asg3
+            await a.view_put_asg4(num_shards=2, nodes=[a.address, b.address])  # for asg4
             await client.data_single_put(a, key='k', val='v')
             response = await client.data_single_get(b, key='k')
             self.assertEqual(response.status, 200)
             self.assertEqual((await response.json())['val'], 'v')
 
-    async def test_view_get(self):
+    async def test_view_get_asg3(self):
         async with start_node() as a, start_node() as b:
             view = [a.container.address, b.container.address]
             await a.view_put(view=view)

@@ -9,16 +9,28 @@ requires python >= 3.11. install via:
 pip install git+https://github.com/adrianmgg/asg3tester.git
 ```
 
-# usage / sample code
+# usage
 within an event loop, call `asg3tester.setup()` before any of the other asg3tester functions, and
 call `asg3tester.cleanup()` before leaving the loop. you can pass some configuration stuff to
 `setup`, but if you've followed the same container/network naming/options as in the spec then the
-defaults should work fine.
+defaults should work fine. See `Config` in [`asg3tester/__init__.pyi`](asg3tester/__init__.pyi) for
+a full list of options.
 
 i'll probably write out docs for the rest it eventually but for now you can just look at `NodeApi`
 and `ClientApi` in [`asg3tester/__init__.pyi`](asg3tester/__init__.pyi) for a list of the functions
 
-NOTE: for assignment 4, use `node.view_put_asg4` instead of `node.view_put`
+# for assignment 4
+
+`node.view_put` is the assignment 3 version,
+for assignment 4 you should call `node.view_put_asg4` instead.
+
+the default image name is `kvs:2.0`, so for assignment 4 you'll probably need to specify the image
+name manually.
+```python
+asg3tester.setup(asg3tester.Config(image_name='kvs:3.0'))
+```
+
+# sample code
 
 ```python
 import unittest
@@ -27,7 +39,10 @@ from asg3tester import start_client, start_node
 
 class TestAssignment3(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
+        # either call with no arguments for default options:
         await asg3tester.setup()
+        # or, pass a Config in:
+        await asg3tester.setup(asg3tester.Config(image_name='kvs:3.0'))
 
     async def asyncTearDown(self) -> None:
         await asg3tester.cleanup()

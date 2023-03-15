@@ -13,8 +13,9 @@ pip install git+https://github.com/adrianmgg/asg3tester.git
 within an event loop, call `asg3tester.setup()` before any of the other asg3tester functions, and
 call `asg3tester.cleanup()` before leaving the loop. you can pass some configuration stuff to
 `setup`, but if you've followed the same container/network naming/options as in the spec then the
-defaults should work fine. See `Config` in [`asg3tester/__init__.pyi`](asg3tester/__init__.pyi) for
-a full list of options.
+defaults should work fine.
+See [`Config` in `asg3tester/__init__.py`](asg3tester/__init__.py#L32-L49) for a full list of
+options (note that the docstring associated with a member is the one immediately *after* it).
 
 i'll probably write out docs for the rest it eventually but for now you can just look at `NodeApi`
 and `ClientApi` in [`asg3tester/__init__.pyi`](asg3tester/__init__.pyi) for a list of the functions

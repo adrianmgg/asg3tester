@@ -338,7 +338,7 @@ class ClientApi:
 
     async def _update_causal_metadata_from(self, response: aiohttp.ClientResponse) -> None:
         try:
-            body = await response.json()
+            body = await response.json(content_type=None)
         except (ValueError, aiohttp.ContentTypeError):
             pass
         else:

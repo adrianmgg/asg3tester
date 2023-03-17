@@ -197,7 +197,7 @@ class NodeContainer:
             try:
                 async with http_session.get(self.base_url/'asg3tester'/'alivetest') as resp:
                     try:
-                        body = await resp.json()
+                        body = await resp.json(content_type=None)
                     except ValueError:
                         pass
                     else:

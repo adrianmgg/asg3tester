@@ -1,3 +1,4 @@
+helper library written to assist in writing tests for assignments 3 and 4 in [CSE138 at UCSC](https://courses.engineering.ucsc.edu/courses/cse138) (winter quarter 2023). Automagically manages docker containers and simulating network partitions between servers.
 
 # prerequisites
 you need to add a new endpoint `GET /asg3tester/alivetest` that responds with `{"alive": true}`,
